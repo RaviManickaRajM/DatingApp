@@ -1,0 +1,96 @@
+using System;
+using System.Data;
+using System.Data.SqlClient;
+
+class Program
+{
+    static void Main()
+    {
+        // Connection strings for source and destination databases
+        string sourceConnectionString = "Data Source=source_server;Initial Catalog=source_database;Integrated Security=True";
+        string destinationConnectionString = "Data Source=destination_server;Initial Catalog=destination_database;Integrated Security=True";
+
+        // Create connection objects for source and destination databases
+        using (SqlConnection sourceConnection = new SqlConnection(sourceConnectionString))
+        using (SqlConnection destinationConnection = new SqlConnection(destinationConnectionString))
+        {
+            // Open connections
+            sourceConnection.Open();
+            destinationConnection.Open();
+
+            // Begin transaction
+            SqlTransaction transaction = destinationConnection.BeginTransaction();
+
+            try
+            {
+                // Get column names from source table
+                DataTable schemaTable = GetSchemaTable(sourceConnection, "source_table");
+
+                // Build insert query dynamically based on column names
+                string insertQuery = BuildInsertQuery(schemaTable, "destination_table");
+
+                // Retrieve data from source database
+                string selectQuery = "SELECT * FROM source_table";
+                using (SqlCommand selectCommand = new SqlCommand(selectQuery, sourceConnection))
+                using (SqlDataReader reader = selectCommand.ExecuteReader())
+                {
+                    // Insert data into destination database
+                    while (reader.Read())
+                    {
+                        // Extract values from reader based on column names
+                        object[] values = new object[schemaTable.Rows.Count];
+                        reader.GetValues(values);
+
+                        // Insert record into destination database
+                        InsertRecord(destinationConnection, insertQuery, values, transaction);
+                    }
+                }
+
+                // Commit transaction if all records inserted successfully
+                transaction.Commit();
+                Console.WriteLine("Records transferred successfully!");
+            }
+            catch (Exception ex)
+            {
+                // Rollback transaction if an error occurs
+                transaction.Rollback();
+                Console.WriteLine($"Error occurred: {ex.Message}");
+            }
+        }
+    }
+
+    static DataTable GetSchemaTable(SqlConnection connection, string tableName)
+    {
+        DataTable schemaTable = new DataTable();
+        string selectSchemaQuery = $"SELECT TOP 0 * FROM {tableName}";
+
+        using (SqlDataAdapter adapter = new SqlDataAdapter(selectSchemaQuery, connection))
+        {
+            adapter.FillSchema(schemaTable, SchemaType.Source);
+        }
+
+        return schemaTable;
+    }
+
+    static string BuildInsertQuery(DataTable schemaTable, string tableName)
+    {
+        string columnNames = string.Join(", ", schemaTable.Columns.Cast<DataColumn>().Select(c => c.ColumnName));
+        string parameterNames = string.Join(", ", schemaTable.Columns.Cast<DataColumn>().Select((c, i) => $"@param{i}"));
+
+        return $"INSERT INTO {tableName} ({columnNames}) VALUES ({parameterNames})";
+    }
+
+    static void InsertRecord(SqlConnection connection, string insertQuery, object[] values, SqlTransaction transaction)
+    {
+        using (SqlCommand command = new SqlCommand(insertQuery, connection, transaction))
+        {
+            for (int i = 0; i < values.Length; i++)
+            {
+                SqlParameter parameter = new SqlParameter($"@param{i}", values[i] ?? DBNull.Value);
+                command.Parameters.Add(parameter);
+            }
+
+            command.ExecuteNonQuery();
+        }
+    }
+}
